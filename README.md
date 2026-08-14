@@ -15,7 +15,7 @@ CITATION.cff:	Machine-readable citation.
 
 sessionInfo.txt:	R version and package versions used to produce v1.0.0.
 
-zenodo.json:	Zenodo deposit metadata.
+.zenodo.json:	Zenodo deposit metadata.
 
 # Requirements
 
@@ -40,19 +40,22 @@ The direct CMS exports supplied by QMT (2) and AM (1) were used with written per
 
 # How to run
 
-1. Clone the repository
-    git clone https://github.com/CamilaVelezDiaz/echinoderm-thesis-pipeline
-    cd echinoderm-thesis-pipeline
+1.Clone the repository
 
-2. Download the source datasets into a data-raw/ folder
-   (see Table 1 of the Scientific Data descriptor for URLs and dates)
+git clone https://github.com/CamilaVelezDiaz/echinoderm-thesis-pipeline
+cd echinoderm-thesis-pipeline
+
+2. Download the source datasets into a data-raw/ folder (see Table 1 of the Scientific Data descriptor for URLs and dates).
 
 3. Restore the package environment (optional but recommended)
-    Rscript -e 'renv::restore()'
+
+Rscript -e 'renv::restore()'
 
 4. Run the pipeline
-    Rscript "01_echinoderm_dataset_integration.R"
-    Rscript "02_echinoderm_post_processing.R"
+
+Rscript "01_echinoderm_dataset_integration.R"
+Rscript "02_echinoderm_post_processing.R"
+
 
 # Main Outputs
 
