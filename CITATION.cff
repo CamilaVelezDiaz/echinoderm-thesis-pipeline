@@ -1,0 +1,35 @@
+cff-version: 1.2.0
+title: >-
+  echinoderm-thesis-pipeline: R workflow for the integrated echinoderm
+  occurrence dataset for northeast Australia and the adjacent Coral Sea
+message: >-
+  If you use this software, please cite it using the metadata below.
+type: software
+version: 1.0.0
+date-released: 2026-08-03
+authors:
+  - family-names: Velez Diaz
+    given-names: Maria Camila
+    orcid: https://orcid.org/0000-0003-4180-1077
+    affiliation: James Cook University
+  - family-names: Birtle
+    given-names: Alastair
+    orcid: 
+    affiliation: James Cook University
+  - family-names: Watson
+    given-names: Sue-Ann
+    orcid: 
+    affiliation: James Cook University
+license: MIT
+repository-code: https://github.com/CamilaVelezDiaz/echinoderm-thesis-pipeline
+url: https://github.com/CamilaVelezDiaz/echinoderm-thesis-pipeline
+keywords:
+  - Echinodermata
+  - biodiversity
+  - Darwin Core
+  - WoRMS
+  - Coral Sea
+  - Great Barrier Reef
+  - Queensland
+  - data integration
+  - occurrence records
