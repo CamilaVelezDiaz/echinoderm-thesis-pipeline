@@ -1,0 +1,36 @@
+{
+  "title": "echinoderm-thesis-pipeline: R workflow for the integrated echinoderm occurrence dataset for northeast Australia and the adjacent Coral Sea",
+  "description": "R workflow for the integrated echinoderm occurrence dataset for northeast Australia and the adjacent Coral Sea. Produces a curated, quality-controlled Darwin Core Archive of 43,470 occurrence records from 13 source datasets, published through OBIS/ALA/GBIF and described in a Scientific Data Data Descriptor.",
+  "creators": [
+    {
+      "name": "Velez Diaz, Maria Camila",
+      "affiliation": "James Cook University",
+      "orcid": "0000-0003-4180-1077",
+      "name": "Birtle, Alistar",
+      "affiliation": "James Cook University",
+      "orcid": "",
+      "name": "Watson, Sue-Ann",
+      "affiliation": "James Cook University",
+      "orcid": ""
+    }
+  ],
+  "keywords": [
+    "Echinodermata",
+    "biodiversity",
+    "Darwin Core",
+    "WoRMS",
+    "Coral Sea",
+    "Great Barrier Reef",
+    "Queensland",
+    "data integration",
+    "occurrence records",
+    "OBIS",
+    "GBIF"
+  ],
+  "license": "MIT",
+  "access_right": "open",
+  "upload_type": "software",
+  "communities": [
+    { "identifier": "biodiversity" }
+  ]
+}
