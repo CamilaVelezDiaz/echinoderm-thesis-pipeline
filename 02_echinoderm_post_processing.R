@@ -31,6 +31,7 @@
 #     with a finer-than-Phylum ID but no source class field
 #     6k: Higher classification from WoRMS (kingdom, class, family, order)
 #   7. Final save
+#   8. Darwin Core Archive Export (occurrence core + eMoF extension)
 # =============================================================================
 
 # =============================================================================
@@ -3917,3 +3918,632 @@ cat("  completeness_summary_by_depth_zone.csv       - species-ID rate by depth z
 cat("  completeness_summary_by_quality_flag.csv     - species-ID rate by data quality flag\n")
 cat("  completeness_summary_depth_x_flag.csv        - three-way crosstab\n")
 cat("  column_documentation.csv                     - key column reference\n")
+
+# =============================================================================
+# SECTION 8: DARWIN CORE ARCHIVE EXPORT (occurrence core + eMoF extension)
+#            PUBLIC RELEASE — OBIS / ALA / GBIF READY
+# =============================================================================
+# All source institutions have confirmed redistribution permission
+# in writing (Australian Museum, Queensland Museum Tropics). This
+# archive is the public deposit version.
+#
+# Outputs:
+#   dwca_public_release/occurrence.txt        (occurrence core)
+#   dwca_public_release/measurementorfact.txt (eMoF extension)
+#   dwca_public_release/meta.xml
+#   dwca_public_release/eml.xml
+#   echinoderm_dwca_public_release.zip
+#
+# PLACEHOLDERS TO FILL IN BEFORE PUBLICATION (search for "<<< FILL IN >>>"):
+#   * ORCID iDs for Alastair Birtles and Sue-Ann Watson
+#   * Scientific Data DOI (in `references`, EML citation, and abstract)
+#   * Dataset DOI          (in `datasetID`, EML citation)
+#   * IPT / repository download URL (in EML <distribution>)
+#   * GRSciColl institution/collection UUIDs (institutionID, collectionID)
+#   * Grant / funding information (EML <project>)
+# =============================================================================
+
+cat("\n== Section 8: Darwin Core Archive export (public release) ==\n\n")
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tibble)
+  library(stringr)
+  library(readr)
+  library(purrr)
+  library(tidyr)
+})
+
+dwc_dir <- "dwca_public_release"
+dir.create(dwc_dir, showWarnings = FALSE)
+
+# -----------------------------------------------------------------------------
+# 8.0  Helpers
+# -----------------------------------------------------------------------------
+
+coalesce_field_by_priority <- function(df, field_prefix) {
+  cols <- names(df)[str_detect(names(df), paste0("^", field_prefix, "__"))]
+  ordered_cols <- intersect(paste0(field_prefix, "__", SOURCE_PRIORITY), cols)
+  ordered_cols <- c(ordered_cols, setdiff(cols, ordered_cols))
+  if (length(ordered_cols) == 0) return(rep(NA_character_, nrow(df)))
+  mat <- df %>% select(all_of(ordered_cols)) %>% as.matrix()
+  apply(mat, 1, function(row_vals) {
+    vals <- row_vals[!is.na(row_vals) & str_trim(coalesce(row_vals, "")) != ""]
+    if (length(vals) == 0) return(NA_character_)
+    vals[1]
+  })
+}
+
+# OBIS strongly recommends WoRMS URN LSID form for taxonID / scientificNameID.
+worms_urn <- function(aphia) {
+  a <- suppressWarnings(as.integer(aphia))
+  ifelse(is.na(a), "", paste0("urn:lsid:marinespecies.org:taxname:", a))
+}
+
+# Strip characters that would break a quote-less tab-delimited archive.
+safe_text <- function(x) {
+  x %>%
+    str_replace_all("[\t\r\n]+", " ") %>%
+    str_replace_all("\"", "'")
+}
+
+# ISO 8601 date check (accepts YYYY, YYYY-MM, YYYY-MM-DD, YYYY-MM-DD/YYYY-MM-DD)
+is_iso_date <- function(x) {
+  x <- coalesce(x, "")
+  x == "" | str_detect(x, "^\\d{4}(-\\d{2}(-\\d{2})?)?(/\\d{4}(-\\d{2}(-\\d{2})?)?)?$")
+}
+
+# -----------------------------------------------------------------------------
+# 8.1  Locate the AphiaID column (varies by pipeline section)
+# -----------------------------------------------------------------------------
+aphia_candidates <- c("accepted_aphiaID", "aphiaID", "worms_aphiaID")
+aphia_col <- aphia_candidates[aphia_candidates %in% names(echino_wide)]
+if (length(aphia_col) == 0) {
+  warning("No AphiaID column found. scientificNameID / taxonID will be blank.")
+  echino_wide$._aphia <- NA_integer_
+} else {
+  echino_wide$._aphia <- echino_wide[[aphia_col[1]]]
+  cat("Using", aphia_col[1], "for scientificNameID / taxonID / acceptedNameUsageID.\n")
+}
+
+# -----------------------------------------------------------------------------
+# 8.2  Coalesce per-source columns not otherwise resolved
+# -----------------------------------------------------------------------------
+cat("Coalescing locality / typeStatus / identifiedBy / dateIdentified...\n")
+dwc_locality       <- coalesce_field_by_priority(echino_wide, "locality")
+dwc_typeStatus     <- coalesce_field_by_priority(echino_wide, "typeStatus")
+dwc_identifiedBy   <- coalesce_field_by_priority(echino_wide, "identifiedBy")
+dwc_dateIdentified <- coalesce_field_by_priority(echino_wide, "dateIdentified")
+
+resolution_lower <- str_to_lower(echino_wide$taxonomic_resolution_level)
+
+# Parse "Genus (Subgenus) species subspecies" without corrupting epithet columns
+name_match <- str_match(
+  echino_wide$accepted_name_final,
+  "^(\\S+)(?:\\s+\\(([^)]+)\\))?(?:\\s+(\\S+))?(?:\\s+(\\S+))?$"
+)
+# [,2] genus  [,3] subgenus  [,4] specificEpithet  [,5] infraspecificEpithet
+
+# -----------------------------------------------------------------------------
+# 8.3  Build the occurrence core
+# -----------------------------------------------------------------------------
+cat("Building occurrence core...\n")
+
+occ <- tibble(
+  # ---- record identifiers & provenance ----
+  occurrenceID        = paste0("JCU-ECHINODERM:", echino_wide$record_key),
+  modified            = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
+  language            = "eng",
+  license             = "http://creativecommons.org/licenses/by/4.0/legalcode",
+  rightsHolder        = "James Cook University",
+  # <<< FILL IN: Scientific Data DOI once assigned >>>
+  references          = "https://doi.org/[Scientific-Data-DOI]",
+  # <<< FILL IN: Dataset DOI once minted (Zenodo, OBIS, or ALA) >>>
+  datasetID           = "https://doi.org/[Dataset-DOI]",
+  datasetName         = "Integrated echinoderm occurrence dataset for northeast Australia and the adjacent Coral Sea",
+  
+  # ---- institution / collection ----
+  # <<< OPTIONAL: fill with GRSciColl UUIDs where known >>>
+  institutionID       = "",
+  collectionID        = "",
+  institutionCode     = str_to_upper(str_trim(coalesce(echino_wide$institutionCode, ""))),
+  collectionCode      = echino_wide$collectionCode,
+  ownerInstitutionCode = str_to_upper(str_trim(coalesce(echino_wide$institutionCode, ""))),
+  
+  # ---- record type ----
+  type = if_else(coalesce(echino_wide$best_basisOfRecord, "") == "PreservedSpecimen",
+                 "PhysicalObject", ""),
+  basisOfRecord       = echino_wide$best_basisOfRecord,
+  informationWithheld = "",
+  dataGeneralizations = if_else(
+    coalesce(echino_wide$coord_recovered_flag, FALSE) &
+      coalesce(echino_wide$coord_recovery_method, "") == "locality_gazetteer_geocoding",
+    "Coordinates estimated from locality text via named-place gazetteer; see coordinateUncertaintyInMeters and georeferenceProtocol.",
+    ""
+  ),
+  
+  # ---- occurrence-level ----
+  catalogNumber       = echino_wide$catalogNumber,
+  recordNumber        = "",
+  recordedBy          = echino_wide$recordedBy,
+  individualCount     = as.character(echino_wide$individualCount),
+  organismQuantity    = as.character(echino_wide$individualCount),
+  organismQuantityType = if_else(
+    !is.na(echino_wide$individualCount) &
+      as.character(echino_wide$individualCount) != "",
+    "individuals", ""
+  ),
+  occurrenceStatus    = coalesce(str_to_lower(echino_wide$occurrenceStatus), "present"),
+  occurrenceRemarks   = paste0(
+    "Integrated record: n_sources=", echino_wide$n_sources,
+    " (", echino_wide$sources_all, ").",
+    " Depth zone: ", echino_wide$depth_zone, ".",
+    " Data-quality flag: ", echino_wide$obs_quality_flag, "."
+  ),
+  preparations = if_else(coalesce(echino_wide$best_basisOfRecord, "") == "PreservedSpecimen",
+                         "preserved specimen", ""),
+  
+  # ---- event ----
+  eventDate           = echino_wide$best_eventDate,
+  year                = as.character(echino_wide$best_year),
+  samplingProtocol    = "",
+  
+  # ---- location ----
+  country             = echino_wide$country,
+  countryCode         = echino_wide$countryCode,
+  stateProvince       = str_to_title(str_trim(coalesce(echino_wide$stateProvince, ""))),
+  locality            = dwc_locality,
+  minimumDepthInMeters = as.character(echino_wide$best_min_depth),
+  maximumDepthInMeters = as.character(echino_wide$best_max_depth),
+  decimalLatitude     = as.character(echino_wide$best_latitude),
+  decimalLongitude    = as.character(echino_wide$best_longitude),
+  geodeticDatum       = "EPSG:4326",
+  coordinateUncertaintyInMeters = as.character(
+    coalesce(echino_wide$coord_uncertainty_m, echino_wide$coordinateUncertaintyInMeters)
+  ),
+  georeferenceSources = case_when(
+    coalesce(echino_wide$coord_recovery_method, "") == "idigbio_geopoint_recovery"    ~ "iDigBio geoPoint JSON field",
+    coalesce(echino_wide$coord_recovery_method, "") == "locality_gazetteer_geocoding" ~ "GeoNames gazetteer; locality-text lookup",
+    TRUE ~ ""
+  ),
+  georeferenceProtocol = case_when(
+    coalesce(echino_wide$coord_recovery_method, "") == "idigbio_geopoint_recovery"    ~ "Coordinate recovered from source geoPoint field",
+    coalesce(echino_wide$coord_recovery_method, "") == "locality_gazetteer_geocoding" ~ "Locality-text geocoding against named-place gazetteer with assigned uncertainty radius",
+    TRUE ~ ""
+  ),
+  georeferenceRemarks = if_else(coalesce(echino_wide$coord_recovered_flag, FALSE),
+                                "Coordinate recovered during post-processing; not in original source record.",
+                                ""),
+  
+  # ---- identification ----
+  identifiedBy        = dwc_identifiedBy,
+  dateIdentified      = dwc_dateIdentified,
+  typeStatus          = dwc_typeStatus,
+  
+  # ---- taxon ----
+  scientificName      = echino_wide$accepted_name_final,
+  scientificNameAuthorship = echino_wide$scientificNameAuthorship,
+  taxonID             = worms_urn(echino_wide$._aphia),
+  scientificNameID    = worms_urn(echino_wide$._aphia),
+  acceptedNameUsageID = worms_urn(echino_wide$._aphia),
+  taxonRank           = resolution_lower,
+  taxonomicStatus     = str_to_lower(coalesce(echino_wide$worms_status_master, "")),
+  nomenclaturalCode   = "ICZN",
+  kingdom             = "Animalia",
+  phylum              = "Echinodermata",
+  class               = coalesce(echino_wide$worms_class, echino_wide$echino_class),
+  order               = coalesce(echino_wide$best_order, ""),
+  family              = coalesce(echino_wide$best_family, ""),
+  genus               = if_else(resolution_lower %in% c("species", "subspecies", "genus"),
+                                coalesce(name_match[, 2], ""), ""),
+  subgenus            = coalesce(name_match[, 3], ""),
+  specificEpithet     = if_else(resolution_lower %in% c("species", "subspecies"),
+                                coalesce(name_match[, 4], ""), ""),
+  infraspecificEpithet = echino_wide$infraspecificEpithet,
+  
+  # ---- other ----
+  fieldNumber          = "",
+  associatedReferences = "",
+  # dynamicProperties keeps only fields without a clean DwC mapping.
+  # obs_quality_flag / depth_zone / n_sources / sources_all live in
+  # occurrenceRemarks and in the eMoF extension below.
+  dynamicProperties    = paste0(
+    '{"depth_zone":"', coalesce(echino_wide$depth_zone, ""),
+    '","is_straddler":', str_to_lower(as.character(coalesce(echino_wide$is_straddler, FALSE))),
+    ',"crosses_zone_boundary":', str_to_lower(as.character(coalesce(echino_wide$crosses_zone_boundary, FALSE))),
+    ',"coord_land_qc_flag":"', coalesce(echino_wide$coord_land_qc_flag, ""),
+    '"}'
+  )
+) %>%
+  mutate(across(everything(), ~ replace_na(as.character(.x), "")))
+
+# -----------------------------------------------------------------------------
+# 8.4  Pre-publication filters + validation
+# -----------------------------------------------------------------------------
+cat("Applying pre-publication filters...\n")
+
+qc_exclude <- coalesce(echino_wide$coord_qc_exclude_recommended, FALSE)
+
+delete_flagged <- str_detect(
+  str_to_lower(paste(coalesce(dwc_locality, ""),
+                     coalesce(occ$occurrenceRemarks, ""))),
+  "to be deleted|duplicate registration"
+)
+
+n_dropped <- sum(qc_exclude | delete_flagged)
+cat("  Dropping", n_dropped, "records (qc_exclude or delete-flagged).\n")
+
+keep_idx <- !(qc_exclude | delete_flagged)
+occ <- occ[keep_idx, ]
+echino_wide_kept <- echino_wide[keep_idx, ]
+
+# Blank out non-ISO event dates (keep the record; drop only the date)
+occ$eventDate[!is_iso_date(occ$eventDate)] <- ""
+
+# Strip tabs / newlines / stray double-quotes from every field
+occ <- occ %>% mutate(across(everything(), safe_text))
+
+# Final assertions
+stopifnot(all(!is.na(occ$occurrenceID) & occ$occurrenceID != ""))
+stopifnot(all(occ$basisOfRecord != ""))
+
+cat("\n--- Section 8 QA ---\n")
+cat("Records in archive           :", nrow(occ), "\n")
+cat("Missing basisOfRecord        :", sum(occ$basisOfRecord == ""), "\n")
+cat("Missing scientificName       :", sum(occ$scientificName == ""), "\n")
+cat("Missing decimalLatitude      :", sum(occ$decimalLatitude == ""), "\n")
+cat("Records with scientificNameID:", sum(occ$scientificNameID != ""), "\n")
+cat("Records with recovered coords:", sum(occ$georeferenceSources != ""), "\n")
+print(table(occ$basisOfRecord))
+print(table(occ$taxonRank))
+
+# -----------------------------------------------------------------------------
+# 8.5  Write occurrence.txt
+# -----------------------------------------------------------------------------
+write_delim(occ, file.path(dwc_dir, "occurrence.txt"),
+            delim = "\t", na = "", quote = "none", eol = "\n")
+cat("Wrote", file.path(dwc_dir, "occurrence.txt"),
+    ":", nrow(occ), "records x", ncol(occ), "fields\n")
+
+# -----------------------------------------------------------------------------
+# 8.6  Build MeasurementOrFact (eMoF) extension
+# -----------------------------------------------------------------------------
+cat("Building MeasurementOrFact (eMoF) extension...\n")
+
+mof_rows <- bind_rows(
+  tibble(
+    occurrenceID     = occ$occurrenceID,
+    measurementType  = "Observation quality flag",
+    measurementValue = as.character(echino_wide_kept$obs_quality_flag),
+    measurementUnit  = ""
+  ),
+  tibble(
+    occurrenceID     = occ$occurrenceID,
+    measurementType  = "Depth zone",
+    measurementValue = as.character(echino_wide_kept$depth_zone),
+    measurementUnit  = ""
+  ),
+  tibble(
+    occurrenceID     = occ$occurrenceID,
+    measurementType  = "Median depth",
+    measurementValue = as.character(echino_wide_kept$depth_median),
+    measurementUnit  = "m"
+  ),
+  tibble(
+    occurrenceID     = occ$occurrenceID,
+    measurementType  = "Depth range width",
+    measurementValue = as.character(echino_wide_kept$depth_uncertainty),
+    measurementUnit  = "m"
+  ),
+  tibble(
+    occurrenceID     = occ$occurrenceID,
+    measurementType  = "Number of contributing sources",
+    measurementValue = as.character(echino_wide_kept$n_sources),
+    measurementUnit  = ""
+  )
+) %>%
+  filter(!is.na(measurementValue),
+         str_trim(measurementValue) != "",
+         measurementValue != "NA") %>%
+  mutate(across(everything(), safe_text))
+
+write_delim(mof_rows, file.path(dwc_dir, "measurementorfact.txt"),
+            delim = "\t", na = "", quote = "none", eol = "\n")
+cat("Wrote", file.path(dwc_dir, "measurementorfact.txt"),
+    ":", nrow(mof_rows), "measurement rows for", nrow(occ), "occurrences\n")
+
+# -----------------------------------------------------------------------------
+# 8.7  Build meta.xml (core + eMoF extension)
+# -----------------------------------------------------------------------------
+cat("Building meta.xml...\n")
+
+dwc_terms <- c(
+  occurrenceID                  = "http://rs.tdwg.org/dwc/terms/occurrenceID",
+  modified                      = "http://purl.org/dc/terms/modified",
+  language                      = "http://purl.org/dc/terms/language",
+  license                       = "http://purl.org/dc/terms/license",
+  rightsHolder                  = "http://purl.org/dc/terms/rightsHolder",
+  references                    = "http://purl.org/dc/terms/references",
+  datasetID                     = "http://rs.tdwg.org/dwc/terms/datasetID",
+  datasetName                   = "http://rs.tdwg.org/dwc/terms/datasetName",
+  institutionID                 = "http://rs.tdwg.org/dwc/terms/institutionID",
+  collectionID                  = "http://rs.tdwg.org/dwc/terms/collectionID",
+  institutionCode               = "http://rs.tdwg.org/dwc/terms/institutionCode",
+  collectionCode                = "http://rs.tdwg.org/dwc/terms/collectionCode",
+  ownerInstitutionCode          = "http://rs.tdwg.org/dwc/terms/ownerInstitutionCode",
+  type                          = "http://purl.org/dc/terms/type",
+  basisOfRecord                 = "http://rs.tdwg.org/dwc/terms/basisOfRecord",
+  informationWithheld           = "http://rs.tdwg.org/dwc/terms/informationWithheld",
+  dataGeneralizations           = "http://rs.tdwg.org/dwc/terms/dataGeneralizations",
+  catalogNumber                 = "http://rs.tdwg.org/dwc/terms/catalogNumber",
+  recordNumber                  = "http://rs.tdwg.org/dwc/terms/recordNumber",
+  recordedBy                    = "http://rs.tdwg.org/dwc/terms/recordedBy",
+  individualCount               = "http://rs.tdwg.org/dwc/terms/individualCount",
+  organismQuantity              = "http://rs.tdwg.org/dwc/terms/organismQuantity",
+  organismQuantityType          = "http://rs.tdwg.org/dwc/terms/organismQuantityType",
+  occurrenceStatus              = "http://rs.tdwg.org/dwc/terms/occurrenceStatus",
+  occurrenceRemarks             = "http://rs.tdwg.org/dwc/terms/occurrenceRemarks",
+  preparations                  = "http://rs.tdwg.org/dwc/terms/preparations",
+  eventDate                     = "http://rs.tdwg.org/dwc/terms/eventDate",
+  year                          = "http://rs.tdwg.org/dwc/terms/year",
+  samplingProtocol              = "http://rs.tdwg.org/dwc/terms/samplingProtocol",
+  country                       = "http://rs.tdwg.org/dwc/terms/country",
+  countryCode                   = "http://rs.tdwg.org/dwc/terms/countryCode",
+  stateProvince                 = "http://rs.tdwg.org/dwc/terms/stateProvince",
+  locality                      = "http://rs.tdwg.org/dwc/terms/locality",
+  minimumDepthInMeters          = "http://rs.tdwg.org/dwc/terms/minimumDepthInMeters",
+  maximumDepthInMeters          = "http://rs.tdwg.org/dwc/terms/maximumDepthInMeters",
+  decimalLatitude               = "http://rs.tdwg.org/dwc/terms/decimalLatitude",
+  decimalLongitude              = "http://rs.tdwg.org/dwc/terms/decimalLongitude",
+  geodeticDatum                 = "http://rs.tdwg.org/dwc/terms/geodeticDatum",
+  coordinateUncertaintyInMeters = "http://rs.tdwg.org/dwc/terms/coordinateUncertaintyInMeters",
+  georeferenceSources           = "http://rs.tdwg.org/dwc/terms/georeferenceSources",
+  georeferenceProtocol          = "http://rs.tdwg.org/dwc/terms/georeferenceProtocol",
+  georeferenceRemarks           = "http://rs.tdwg.org/dwc/terms/georeferenceRemarks",
+  identifiedBy                  = "http://rs.tdwg.org/dwc/terms/identifiedBy",
+  dateIdentified                = "http://rs.tdwg.org/dwc/terms/dateIdentified",
+  typeStatus                    = "http://rs.tdwg.org/dwc/terms/typeStatus",
+  scientificName                = "http://rs.tdwg.org/dwc/terms/scientificName",
+  scientificNameAuthorship      = "http://rs.tdwg.org/dwc/terms/scientificNameAuthorship",
+  taxonID                       = "http://rs.tdwg.org/dwc/terms/taxonID",
+  scientificNameID              = "http://rs.tdwg.org/dwc/terms/scientificNameID",
+  acceptedNameUsageID           = "http://rs.tdwg.org/dwc/terms/acceptedNameUsageID",
+  taxonRank                     = "http://rs.tdwg.org/dwc/terms/taxonRank",
+  taxonomicStatus               = "http://rs.tdwg.org/dwc/terms/taxonomicStatus",
+  nomenclaturalCode             = "http://rs.tdwg.org/dwc/terms/nomenclaturalCode",
+  kingdom                       = "http://rs.tdwg.org/dwc/terms/kingdom",
+  phylum                        = "http://rs.tdwg.org/dwc/terms/phylum",
+  class                         = "http://rs.tdwg.org/dwc/terms/class",
+  order                         = "http://rs.tdwg.org/dwc/terms/order",
+  family                        = "http://rs.tdwg.org/dwc/terms/family",
+  genus                         = "http://rs.tdwg.org/dwc/terms/genus",
+  subgenus                      = "http://rs.tdwg.org/dwc/terms/subgenus",
+  specificEpithet               = "http://rs.tdwg.org/dwc/terms/specificEpithet",
+  infraspecificEpithet          = "http://rs.tdwg.org/dwc/terms/infraspecificEpithet",
+  fieldNumber                   = "http://rs.tdwg.org/dwc/terms/fieldNumber",
+  associatedReferences          = "http://rs.tdwg.org/dwc/terms/associatedReferences",
+  dynamicProperties             = "http://rs.tdwg.org/dwc/terms/dynamicProperties"
+)
+
+# Assert every column in occ has a term mapping (catches columns silently added later).
+missing_terms <- setdiff(names(occ), names(dwc_terms))
+if (length(missing_terms) > 0) {
+  stop("meta.xml term mapping missing for columns: ",
+       paste(missing_terms, collapse = ", "))
+}
+
+field_lines <- map_chr(seq_along(names(occ)) - 1, function(i) {
+  col <- names(occ)[i + 1]
+  sprintf('    <field index="%d" term="%s"/>', i, dwc_terms[[col]])
+})
+
+meta_xml <- c(
+  '<?xml version="1.0" encoding="UTF-8"?>',
+  '<archive xmlns="http://rs.tdwg.org/dwc/text/" metadata="eml.xml">',
+  '  <core encoding="UTF-8"',
+  '        fieldsTerminatedBy="\\t"',
+  '        linesTerminatedBy="\\n"',
+  '        fieldsEnclosedBy=""',
+  '        ignoreHeaderLines="1"',
+  '        rowType="http://rs.tdwg.org/dwc/terms/Occurrence">',
+  '    <files>',
+  '      <location>occurrence.txt</location>',
+  '    </files>',
+  '    <id index="0"/>',
+  field_lines,
+  '  </core>',
+  '  <extension encoding="UTF-8"',
+  '             fieldsTerminatedBy="\\t"',
+  '             linesTerminatedBy="\\n"',
+  '             fieldsEnclosedBy=""',
+  '             ignoreHeaderLines="1"',
+  '             rowType="http://rs.tdwg.org/dwc/terms/MeasurementOrFact">',
+  '    <files>',
+  '      <location>measurementorfact.txt</location>',
+  '    </files>',
+  '    <coreid index="0"/>',
+  '    <field index="1" term="http://rs.tdwg.org/dwc/terms/measurementType"/>',
+  '    <field index="2" term="http://rs.tdwg.org/dwc/terms/measurementValue"/>',
+  '    <field index="3" term="http://rs.tdwg.org/dwc/terms/measurementUnit"/>',
+  '  </extension>',
+  '</archive>'
+)
+writeLines(meta_xml, file.path(dwc_dir, "meta.xml"), sep = "\n")
+cat("Wrote", file.path(dwc_dir, "meta.xml"), "\n")
+
+# -----------------------------------------------------------------------------
+# 8.8  Build eml.xml (full GBIF EML 1.2 profile, no private comments)
+# -----------------------------------------------------------------------------
+cat("Building eml.xml...\n")
+
+eml_xml <- c(
+  '<?xml version="1.0" encoding="UTF-8"?>',
+  '<eml:eml xmlns:eml="eml://ecoinformatics.org/eml-2.1.1"',
+  '         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"',
+  '         xsi:schemaLocation="eml://ecoinformatics.org/eml-2.1.1 http://rs.gbif.org/schema/eml-gbif-profile/1.2/eml.xsd"',
+  '         packageId="JCU-ECHINODERM-DATASET/v1"',
+  '         system="http://gbif.org" scope="system" xml:lang="eng">',
+  '  <dataset>',
+  '    <title xml:lang="eng">Integrated echinoderm occurrence dataset for northeast Australia and the adjacent Coral Sea</title>',
+  '    <creator>',
+  '      <individualName><givenName>Maria Camila</givenName><surName>Velez Diaz</surName></individualName>',
+  '      <organizationName>James Cook University</organizationName>',
+  '      <positionName>Postgraduate Researcher</positionName>',
+  '      <electronicMailAddress>mariacamila.velezdiaz@my.jcu.edu.au</electronicMailAddress>',
+  '      <userId directory="https://orcid.org/">0000-0003-4180-1077</userId>',
+  '    </creator>',
+  '    <metadataProvider>',
+  '      <individualName><givenName>Maria Camila</givenName><surName>Velez Diaz</surName></individualName>',
+  '      <organizationName>James Cook University</organizationName>',
+  '      <electronicMailAddress>mariacamila.velezdiaz@my.jcu.edu.au</electronicMailAddress>',
+  '    </metadataProvider>',
+  '    <associatedParty>',
+  '      <individualName><givenName>Alastair</givenName><surName>Birtles</surName></individualName>',
+  '      <organizationName>James Cook University</organizationName>',
+  #  <<< OPTIONAL: add <userId directory="https://orcid.org/">ORCID</userId> >>>
+  '      <role>coPrincipalInvestigator</role>',
+  '    </associatedParty>',
+  '    <associatedParty>',
+  '      <individualName><givenName>Sue-Ann</givenName><surName>Watson</surName></individualName>',
+  '      <organizationName>James Cook University</organizationName>',
+  #  <<< OPTIONAL: add <userId directory="https://orcid.org/">ORCID</userId> >>>
+  '      <role>coPrincipalInvestigator</role>',
+  '    </associatedParty>',
+  '    <associatedParty>',
+  '      <organizationName>Australian Museum</organizationName>',
+  '      <role>contentProvider</role>',
+  '    </associatedParty>',
+  '    <associatedParty>',
+  '      <organizationName>Queensland Museum Tropics</organizationName>',
+  '      <role>contentProvider</role>',
+  '    </associatedParty>',
+  paste0('    <pubDate>', format(Sys.Date(), "%Y-%m-%d"), '</pubDate>'),
+  '    <language>eng</language>',
+  '    <abstract>',
+  '      <para>An integrated occurrence dataset of echinoderms (Phylum Echinodermata) for northeast Australia and the adjacent Coral Sea, spanning shelf, slope and abyssal habitats between 10 degrees S to 29 degrees S and 142 degrees E to 154 degrees E. The dataset consolidates 43,470 curated occurrence records assembled from 13 source datasets covering national and international biodiversity aggregators, a national research infrastructure, and direct Collection Management System exports from the Queensland Museum Tropics and the Australian Museum. Records were integrated through a reproducible R workflow that harmonises Darwin Core fields, deduplicates records across sources, and resolves conflicts in coordinates, collection year, basis of record, depth and taxonomic name against the World Register of Marine Species (WoRMS). Per-record data-quality flags (coordinate quality, depth quality, taxonomic resolution) are provided as MeasurementOrFact rows and in dynamicProperties. Full methods are described in the accompanying Scientific Data descriptor.</para>',
+  '    </abstract>',
+  '    <keywordSet>',
+  '      <keyword>Occurrence</keyword>',
+  '      <keyword>Specimen</keyword>',
+  '      <keywordThesaurus>GBIF Dataset Type Vocabulary</keywordThesaurus>',
+  '    </keywordSet>',
+  '    <keywordSet>',
+  '      <keyword>Echinodermata</keyword>',
+  '      <keyword>Asteroidea</keyword>',
+  '      <keyword>Ophiuroidea</keyword>',
+  '      <keyword>Echinoidea</keyword>',
+  '      <keyword>Holothuroidea</keyword>',
+  '      <keyword>Crinoidea</keyword>',
+  '      <keyword>Coral Sea</keyword>',
+  '      <keyword>Great Barrier Reef</keyword>',
+  '      <keyword>Queensland</keyword>',
+  '      <keyword>deep sea</keyword>',
+  '    </keywordSet>',
+  '    <intellectualRights>',
+  '      <para>This work is licensed under a <ulink url="https://creativecommons.org/licenses/by/4.0/legalcode"><citetitle>Creative Commons Attribution (CC BY 4.0) License</citetitle></ulink>. Includes records supplied by the Australian Museum and by Queensland Museum Tropics, both used with written permission and acknowledged as contributing institutions.</para>',
+  '    </intellectualRights>',
+  '    <distribution scope="document">',
+  '      <online>',
+  # <<< FILL IN: IPT / Zenodo DwC-A URL once published >>>
+  '        <url function="download">[Insert IPT or Zenodo DwC-A URL after publication]</url>',
+  '      </online>',
+  '    </distribution>',
+  '    <coverage>',
+  '      <geographicCoverage>',
+  '        <geographicDescription>Northeast Australia and the adjacent Coral Sea, spanning shelf, slope and abyssal habitats from the Torres Strait to southeast Queensland, including the Gulf of Carpentaria and adjacent Coral Sea waters.</geographicDescription>',
+  '        <boundingCoordinates>',
+  '          <westBoundingCoordinate>142</westBoundingCoordinate>',
+  '          <eastBoundingCoordinate>154</eastBoundingCoordinate>',
+  '          <northBoundingCoordinate>-10</northBoundingCoordinate>',
+  '          <southBoundingCoordinate>-29</southBoundingCoordinate>',
+  '        </boundingCoordinates>',
+  '      </geographicCoverage>',
+  '      <temporalCoverage>',
+  '        <rangeOfDates>',
+  '          <beginDate><calendarDate>1861-01-01</calendarDate></beginDate>',
+  '          <endDate><calendarDate>2026-07-30</calendarDate></endDate>',
+  '        </rangeOfDates>',
+  '      </temporalCoverage>',
+  '      <taxonomicCoverage>',
+  '        <taxonomicClassification><taxonRankName>phylum</taxonRankName><taxonRankValue>Echinodermata</taxonRankValue></taxonomicClassification>',
+  '        <taxonomicClassification><taxonRankName>class</taxonRankName><taxonRankValue>Asteroidea</taxonRankValue></taxonomicClassification>',
+  '        <taxonomicClassification><taxonRankName>class</taxonRankName><taxonRankValue>Ophiuroidea</taxonRankValue></taxonomicClassification>',
+  '        <taxonomicClassification><taxonRankName>class</taxonRankName><taxonRankValue>Echinoidea</taxonRankValue></taxonomicClassification>',
+  '        <taxonomicClassification><taxonRankName>class</taxonRankName><taxonRankValue>Holothuroidea</taxonRankValue></taxonomicClassification>',
+  '        <taxonomicClassification><taxonRankName>class</taxonRankName><taxonRankValue>Crinoidea</taxonRankValue></taxonomicClassification>',
+  '      </taxonomicCoverage>',
+  '    </coverage>',
+  '    <maintenance>',
+  '      <description><para>Static snapshot corresponding to source download dates listed in the associated Scientific Data descriptor.</para></description>',
+  '      <maintenanceUpdateFrequency>notPlanned</maintenanceUpdateFrequency>',
+  '    </maintenance>',
+  '    <contact>',
+  '      <individualName><givenName>Maria Camila</givenName><surName>Velez Diaz</surName></individualName>',
+  '      <organizationName>James Cook University</organizationName>',
+  '      <electronicMailAddress>mariacamila.velezdiaz@my.jcu.edu.au</electronicMailAddress>',
+  '      <userId directory="https://orcid.org/">0000-0003-4180-1077</userId>',
+  '    </contact>',
+  '    <methods>',
+  '      <methodStep>',
+  '        <description>',
+  '          <para>Occurrence records were integrated from 13 source datasets, harmonised to Darwin Core, deduplicated using a hierarchical occurrenceID / catalogNumber / composite-key strategy, and cross-source conflicts in coordinates, collection year, depth, basis of record and taxonomic name were resolved through a scripted R workflow. All scientific names were validated against the World Register of Marine Species (WoRMS). Per-record data-quality flags are provided in the MeasurementOrFact extension and in dynamicProperties. Full methods are described in the associated Scientific Data descriptor.</para>',
+  '        </description>',
+  '      </methodStep>',
+  '    </methods>',
+  '    <project>',
+  '      <title>Integrated echinoderm occurrence dataset for northeast Australia and the adjacent Coral Sea</title>',
+  '      <personnel>',
+  '        <individualName><givenName>Maria Camila</givenName><surName>Velez Diaz</surName></individualName>',
+  '        <role>principalInvestigator</role>',
+  '      </personnel>',
+  # <<< OPTIONAL: add <funding> block if grant information applies >>>
+  '    </project>',
+  '  </dataset>',
+  '  <additionalMetadata>',
+  '    <metadata>',
+  '      <gbif>',
+  paste0('        <dateStamp>', format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"), '</dateStamp>'),
+  '        <hierarchyLevel>dataset</hierarchyLevel>',
+  # <<< FILL IN: dataset DOI once minted >>>
+  '        <citation>Velez Diaz, M.C., Birtles, A. and Watson, S.-A. (2026). Integrated echinoderm occurrence dataset for northeast Australia and the adjacent Coral Sea. James Cook University. https://doi.org/[Dataset-DOI]</citation>',
+  '        <resourceLogoUrl></resourceLogoUrl>',
+  '      </gbif>',
+  '    </metadata>',
+  '  </additionalMetadata>',
+  '</eml:eml>'
+)
+writeLines(eml_xml, file.path(dwc_dir, "eml.xml"), sep = "\n")
+cat("Wrote", file.path(dwc_dir, "eml.xml"), "\n")
+
+# -----------------------------------------------------------------------------
+# 8.9  Package ZIP
+# -----------------------------------------------------------------------------
+zip_target <- "echinoderm_dwca_public_release.zip"
+if (file.exists(zip_target)) file.remove(zip_target)
+
+old_wd <- getwd()
+setwd(dwc_dir)
+utils::zip(zipfile = file.path("..", zip_target),
+           files = c("occurrence.txt", "measurementorfact.txt",
+                     "meta.xml", "eml.xml"))
+setwd(old_wd)
+
+cat("\n=== Section 8 complete ===\n")
+cat("Written:\n")
+cat("  ", file.path(dwc_dir, "occurrence.txt"), "\n")
+cat("  ", file.path(dwc_dir, "measurementorfact.txt"), "\n")
+cat("  ", file.path(dwc_dir, "meta.xml"), "\n")
+cat("  ", file.path(dwc_dir, "eml.xml"), "\n")
+cat("  ", zip_target, "\n\n")
+
+cat("Next steps before public deposit:\n")
+cat("  1. Fill in the five placeholders marked '<<< FILL IN >>>' in this script:\n")
+cat("       - Scientific Data DOI (references)\n")
+cat("       - Dataset DOI (datasetID, EML citation)\n")
+cat("       - IPT / Zenodo download URL (EML <distribution>)\n")
+cat("       - Alastair Birtles / Sue-Ann Watson ORCID iDs (EML <associatedParty>)\n")
+cat("       - Grant / funding information (EML <project>)\n")
+cat("  2. Validate the archive at https://tools.gbif.org/dwca-validator/\n")
+cat("  3. Deposit on Zenodo for an immediate citable DOI.\n")
+cat("  4. Submit through the OBIS Australia IPT (or ALA IPT);\n")
+cat("     federation to GBIF is automatic once accepted.\n")
