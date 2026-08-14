@@ -36,7 +36,7 @@ The pipeline expects 13 raw source files that must be downloaded separately. The
     Queensland Museum Tropics (QMT) — 2 direct CMS exports
     Australian Museum (AM) — 1 direct CMS export
 
-The two direct Collection Management System (CMS) exports supplied by QMT and AM were used with written permission from the depositing institutions and are NOT redistributed through this repository or through the deposited dataset.
+The direct CMS exports supplied by QMT (2) and AM (1) were used with written permission from the depositing institutions. The original export files themselves are not redistributed through this repository; the derived occurrence records are included in the deposited dataset with permission of both institutions, acknowledged above.
 
 # How to run
 
@@ -58,7 +58,7 @@ The two direct Collection Management System (CMS) exports supplied by QMT and AM
 
     echino_wide.csv — the primary wide-format table (43,470 records)
     echino_wide_depth.csv — depth-bearing subset (24,669 records)
-    dwca_public_release/ — Darwin Core Archive (occurrence.txt, measurementorfact.txt, meta.xml, eml.xml)
+    dwca_public_release/ — Darwin Core Archive (occurrence.txt, meta.xml, eml.xml)
     echinoderm_dwca_public_release.zip — the packaged archive for OBIS/ALA/GBIF deposit
 
 # Citation
@@ -77,7 +77,7 @@ Companion resources:
 
 This code is released under the MIT License (see LICENSE).
 
-The published integrated dataset is released under a Creative Commons Attribution 4.0 International licence (CC BY 4.0). Original CMS exports supplied by the Australian Museum and Queensland Museum Tropics remain subject to the institutions' own access conditions and are not redistributed.
+The published integrated dataset is released under a Creative Commons Attribution 4.0 International licence (CC BY 4.0). Original CMS export files supplied by the Australian Museum and Queensland Museum Tropics remain subject to the institutions' own access conditions and are not redistributed; the derived occurrence records are included in the deposited dataset with permission of both institutions.
 
 # Authors
 
