@@ -12,13 +12,12 @@ authors:
     given-names: Maria Camila
     orcid: https://orcid.org/0000-0003-4180-1077
     affiliation: James Cook University
-  - family-names: Birtle
+  - family-names: Birtles
     given-names: Alastair
-    orcid: 
+    affiliation: James Cook University
     affiliation: James Cook University
   - family-names: Watson
     given-names: Sue-Ann
-    orcid: 
     affiliation: James Cook University
 license: MIT
 repository-code: https://github.com/CamilaVelezDiaz/echinoderm-thesis-pipeline
