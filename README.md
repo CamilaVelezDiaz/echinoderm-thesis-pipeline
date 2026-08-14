@@ -88,5 +88,8 @@ The published integrated dataset is released under a Creative Commons Attributio
     Alastair Birtles — College of Science and Engineering, James Cook University
     Sue-Ann Watson — College of Science and Engineering, James Cook University
 
+# Contact 
+    Maria Camila Velez Diaz - mariacamila.velezdiaz@my.jcu.edu.au
+
 # Acknowledgements
 We thank the Australian Museum (Claire Rowe), Queensland Museum Tropics (Stefano Borghi) and Watson Lab (Michela Mitchell) for supplying direct CMS exports of their echinoderm holdings.
