@@ -4162,20 +4162,19 @@ occ <- tibble(
 # -----------------------------------------------------------------------------
 cat("Applying pre-publication filters...\n")
 
-qc_exclude <- coalesce(echino_wide$coord_qc_exclude_recommended, FALSE)
+# No records are dropped here. coord_qc_exclude_recommended is preserved as
+# metadata (dynamicProperties/coord_land_qc_flag) for downstream users to
+# filter themselves - never used to remove records from the archive.
+# The "duplicate registration" text check was investigated and removed:
+# the note only ever appears in locality__iDigBio (never in an actual
+# notes/remarks field, and never confirmed by the source institution's own
+# system - see G12229/G12229.2 cross-check against QM's own collections
+# database, which shows no duplicate flag and different preparations for
+# each). Treated as unreliable and not used to drop or flag records.
 
-delete_flagged <- str_detect(
-  str_to_lower(paste(coalesce(dwc_locality, ""),
-                     coalesce(occ$occurrenceRemarks, ""))),
-  "to be deleted|duplicate registration"
-)
+echino_wide_kept <- echino_wide
 
-n_dropped <- sum(qc_exclude | delete_flagged)
-cat("  Dropping", n_dropped, "records (qc_exclude or delete-flagged).\n")
-
-keep_idx <- !(qc_exclude | delete_flagged)
-occ <- occ[keep_idx, ]
-echino_wide_kept <- echino_wide[keep_idx, ]
+cat("  Records kept: all", nrow(occ), "- no exclusion filters applied.\n")
 
 # Blank out non-ISO event dates (keep the record; drop only the date)
 occ$eventDate[!is_iso_date(occ$eventDate)] <- ""
