@@ -68,6 +68,15 @@ The direct CMS exports supplied by QMT (2) and AM (1) were used with written per
     dwca_public_release/ — Darwin Core Archive (occurrence.txt, meta.xml, eml.xml)
     echinoderm_dwca_public_release.zip — the packaged archive for OBIS/ALA/GBIF deposit
 
+## Reproducibility notes
+
+This pipeline was run under `LC_COLLATE=Spanish_Mexico.utf8` (see `sessionInfo.txt` for the full session record). This does not affect reproducibility: the only step in the pipeline where locale-dependent text sorting could influence the final result (the record_key tie-break in Section 0 of 02_echinoderm_post_processing.R`) uses locale-independent, byte-order comparison (`.locale = "C"`) rather than the session's own locale. This was verified empirically before applying the fix - zero groups in the current dataset have a genuine tie requiring this tie-break to activate - so the fix is a safeguard for future reruns with additional or updated source data, not a correction to an active problem.
+
+Every other locale-sensitive operation in the pipeline (numeric sorting for depth/coordinate resolution, print-only diagnostic tables) either doesn't depend on text comparison at all, or is used purely for on-screen diagnostics rather than to determine which value is written to the final dataset.
+
+Running this pipeline under any other locale (e.g. `English_US.utf8`) will produce an identical `echino_wide.csv` and Darwin Core Archive.
+
+
 ## Citation
 
 If you use this code, please cite:
