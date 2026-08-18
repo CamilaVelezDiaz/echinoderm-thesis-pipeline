@@ -4037,9 +4037,9 @@ occ <- tibble(
   license             = "http://creativecommons.org/licenses/by/4.0/legalcode",
   rightsHolder        = "James Cook University",
   # <<< FILL IN: Scientific Data DOI once assigned >>>
-  references          = "https://doi.org/[Scientific-Data-DOI]",
+  references          = "https://doi.org/[Scientific-Data-DOI]", # populated after Scientific Data DOI is minted
   # <<< FILL IN: Dataset DOI once minted (Zenodo, OBIS, or ALA) >>>
-  datasetID           = "https://doi.org/[Dataset-DOI]",
+  datasetID           = "https://doi.org/[Dataset-DOI]", # populated after Zenodo/OBIS DOI is minted
   datasetName         = "Integrated echinoderm occurrence dataset for northeast Australia and the adjacent Coral Sea",
   
   # ---- institution / collection ----
@@ -4147,11 +4147,11 @@ occ <- tibble(
   # dynamicProperties keeps only fields without a clean DwC mapping.
   # obs_quality_flag / depth_zone / n_sources / sources_all live in
   # occurrenceRemarks and in the eMoF extension below.
-  dynamicProperties    = paste0(
-    '{"depth_zone":"', coalesce(echino_wide$depth_zone, ""),
-    '","is_straddler":', str_to_lower(as.character(coalesce(echino_wide$is_straddler, FALSE))),
-    ',"crosses_zone_boundary":', str_to_lower(as.character(coalesce(echino_wide$crosses_zone_boundary, FALSE))),
-    ',"coord_land_qc_flag":"', coalesce(echino_wide$coord_land_qc_flag, ""),
+  dynamicProperties = paste0(
+    '{"depth_zone":"', echino_wide$depth_zone,
+    '","is_straddler":', str_to_lower(as.character(echino_wide$is_straddler)),
+    ',"crosses_zone_boundary":', str_to_lower(as.character(echino_wide$crosses_zone_boundary)),
+    ',"coord_land_qc_flag":"', echino_wide$coord_land_qc_flag,
     '"}'
   )
 ) %>%
