@@ -31,7 +31,6 @@
 #     with a finer-than-Phylum ID but no source class field
 #     6k: Higher classification from WoRMS (kingdom, class, family, order)
 #   7. Final save
-#   8. Darwin Core Archive Export (occurrence core + eMoF extension)
 # =============================================================================
 
 # =============================================================================
@@ -87,7 +86,17 @@ cat("Case-insensitive duplicates before fix:",
 echino_wide <- echino_wide %>%
   mutate(record_key_lower = str_to_lower(record_key)) %>%
   group_by(record_key_lower) %>%
-  arrange(desc(n_sources), record_key) %>%
+  arrange(desc(n_sources), record_key, .locale = "C") %>% 
+  # .locale = "C" forces byte-order string comparison regardless of the
+  # running session's locale, so the tie-break on record_key can't produce
+  # a different result on a machine with a different locale than this one
+  # (Spanish_Mexico.utf8). Verified empirically that this makes no
+  # difference to the CURRENT dataset - zero groups have a genuine tie in
+  # n_sources (checked directly: filter to duplicate groups, filter to
+  # max n_sources, count groups still >1 row - result was 0), so the
+  # record_key tie-break never actually activates with this data. Applied
+  # as a safeguard for future reruns with additional/updated sources,
+  # not a fix for an active bug.
   slice(1) %>%
   ungroup() %>%
   select(-record_key_lower)
@@ -1493,7 +1502,7 @@ echino_wide <- echino_wide %>%
     best_max_depth = if_else(record_key %in% swapped_minmax_keys, 429.6, best_max_depth),
     depth_quality_note = if_else(
       record_key %in% swapped_minmax_keys,
-      "Valores invertidos corregidos tras validacion geografica en el talud continental",
+      "Min/max values swapped back to correct order following geographic validation on the continental slope",
       depth_quality_note
     )
   )
@@ -4024,6 +4033,22 @@ name_match <- str_match(
 )
 # [,2] genus  [,3] subgenus  [,4] specificEpithet  [,5] infraspecificEpithet
 
+# Canonicalizar collectionCode dentro de cada institución por separado -
+# NUNCA fusionar entre instituciones distintas, aunque el nombre se parezca.
+# "Invertebrates - Marine & Other" (AM) y "OtherInverts" (QM) son colecciones
+# genuinamente distintas en museos distintos, pese a la similitud de nombres.
+collectionCode_clean <- str_trim(coalesce(echino_wide$collectionCode, ""))
+institutionCode_clean <- str_to_upper(str_trim(coalesce(echino_wide$institutionCode, "")))
+
+collectionCode_canonical <- case_when(
+  institutionCode_clean == "AM" &
+    str_detect(str_to_lower(collectionCode_clean), "invertebrates") &
+    str_detect(str_to_lower(collectionCode_clean), "marine") ~ "Invertebrates - Marine & Other",
+  institutionCode_clean == "QM" &
+    str_detect(str_to_lower(collectionCode_clean), "otherinvert") ~ "OtherInverts",
+  TRUE ~ collectionCode_clean
+)
+
 # -----------------------------------------------------------------------------
 # 8.3  Build the occurrence core
 # -----------------------------------------------------------------------------
@@ -4047,7 +4072,7 @@ occ <- tibble(
   institutionID       = "",
   collectionID        = "",
   institutionCode     = str_to_upper(str_trim(coalesce(echino_wide$institutionCode, ""))),
-  collectionCode      = echino_wide$collectionCode,
+  collectionCode      = collectionCode_canonical,
   ownerInstitutionCode = str_to_upper(str_trim(coalesce(echino_wide$institutionCode, ""))),
   
   # ---- record type ----
@@ -4142,7 +4167,7 @@ occ <- tibble(
   infraspecificEpithet = echino_wide$infraspecificEpithet,
   
   # ---- other ----
-  fieldNumber          = "",
+  fieldNumber = "",
   associatedReferences = "",
   # dynamicProperties keeps only fields without a clean DwC mapping.
   # obs_quality_flag / depth_zone / n_sources / sources_all live in
