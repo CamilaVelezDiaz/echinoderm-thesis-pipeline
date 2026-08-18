@@ -18,7 +18,7 @@ R workflow for the integrated echinoderm occurrence dataset for northeast Austra
 ## Requirements
 
 - **R version**: 4.5.1 or higher.
-- **Key packages to run 01/02**: `dplyr`, `tibble`, `stringr`, `readr`, `purrr`, `tidyr`, `worrms` (WoRMS API). The OBIS source is a static snapshot, generated once via `robis::occurrence()` prior to this pipeline, not regenerated at runtime, since OBIS is a continuously-updated live database and a fixed snapshot is needed for a reproducible result. robis is therefore not required to run 01_echinoderm_dataset_integration.R or 02_echinoderm_post_processing.R directly.
+- **Key packages to run 01/02**: `dplyr`, `tibble`, `stringr`, `readr`, `purrr`, `tidyr`, `worrms` (WoRMS API), `sf` and `rnaturalearth` (coordinate/land QC flagging in Section 1d of 02_echinoderm_post_processing.R - required to reproduce coord_land_qc_flag). The OBIS source is a static snapshot, generated once via `robis::occurrence()` prior to this pipeline, not regenerated at runtime, since OBIS is a continuously-updated live database and a fixed snapshot is needed for a reproducible result. robis is therefore not required to run 01_echinoderm_dataset_integration.R or 02_echinoderm_post_processing.R directly.
 - Full package versions are recorded in `sessionInfo.txt`.
 
 ## Data sources 
