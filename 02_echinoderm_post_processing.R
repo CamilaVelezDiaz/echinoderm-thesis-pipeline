@@ -3700,12 +3700,29 @@ cat("\n== Resolving per-record license (most-restrictive-wins across all contrib
 normalize_license <- function(x) {
   x_low <- str_to_lower(coalesce(x, ""))
   case_when(
-    str_detect(x_low, "cc0|publicdomain/zero") ~ "CC0",
-    str_detect(x_low, "by-nc-nd|by_nc_nd")      ~ "CC-BY-NC-ND",
-    str_detect(x_low, "by-nc-sa|by_nc_sa")      ~ "CC-BY-NC-SA",
-    str_detect(x_low, "by-nc|by_nc")            ~ "CC-BY-NC",
-    str_detect(x_low, "by-sa|by_sa")            ~ "CC-BY-SA",
+    # CC0 / public domain
+    str_detect(x_low, "cc0|publicdomain/zero|public domain") ~ "CC0",
+
+    # NC + ND (check before plain NC/ND, most restrictive combination)
+    str_detect(x_low, "by-nc-nd|by_nc_nd") ~ "CC-BY-NC-ND",
+    str_detect(x_low, "non.?commercial") & str_detect(x_low, "no.?deriv") ~ "CC-BY-NC-ND",
+
+    # NC + SA
+    str_detect(x_low, "by-nc-sa|by_nc_sa") ~ "CC-BY-NC-SA",
+    str_detect(x_low, "non.?commercial") & str_detect(x_low, "share.?alike") ~ "CC-BY-NC-SA",
+
+    # NC alone (abbreviated or spelled out - "non-commercial", "noncommercial")
+    str_detect(x_low, "by-nc|by_nc") ~ "CC-BY-NC",
+    str_detect(x_low, "non.?commercial") ~ "CC-BY-NC",
+
+    # SA alone
+    str_detect(x_low, "by-sa|by_sa") ~ "CC-BY-SA",
+    str_detect(x_low, "share.?alike") & !str_detect(x_low, "non.?commercial") ~ "CC-BY-SA",
+
+    # Plain BY / Attribution (abbreviated CC-BY forms, or the word "attribution" alone)
     str_detect(x_low, "^cc-by$|^cc_by_4_0$|by/4\\.0|licenses/by/|^cc-by \\d") ~ "CC-BY",
+    str_detect(x_low, "^attribution license$|^attribution$") ~ "CC-BY",
+
     TRUE ~ NA_character_
   )
 }
