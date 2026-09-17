@@ -30,7 +30,9 @@
 #     (case-insensitive) + taxon->class lookup recovery for 144 records
 #     with a finer-than-Phylum ID but no source class field
 #     6k: Higher classification from WoRMS (kingdom, class, family, order)
+#     6L: Per-record license resolution ("most restrictive wins")
 #   7. Final save
+#   8: DARWIN CORE ARCHIVE EXPORT (occurrence core + eMoF extension) PUBLIC RELEASE — OBIS / ALA / GBIF READY
 # =============================================================================
 
 # =============================================================================
@@ -3655,6 +3657,113 @@ echino_wide <- echino_wide %>%
 
 cat("\n=== Section 6k complete ===\n")
 
+# -----------------------------------------------------------------------------
+# SECTION 6L: Per-record license resolution ("most restrictive wins")
+# -----------------------------------------------------------------------------
+# The 'license' field was previously hardcoded to CC BY 4.0 for every record.
+# This is legally incorrect: a substantial share of records (~24% by original
+# source licence, mostly ALA-sourced) carry a more restrictive original
+# licence (CC-BY-NC, CC-BY-NC-ND, CC-BY-NC-SA, CC-BY-SA) that CC BY 4.0 does
+# not respect.
+#
+# Reads from echino_long (Layer A - one row per contributing source per
+# record, the permanent unconsolidated audit trail) rather than trusting
+# echino_wide's own license/dcterms:license columns, since those are built
+# via the generic consensus_fields logic (first non-blank value in SOURCE
+# PRIORITY order - appropriate for taxonomic/geographic trust, but NOT for
+# licence conditions, where a restriction from any contributing source
+# genuinely applies regardless of what a higher-priority source reported).
+#
+# VERIFIED (2026): only 3 of 43,470 records show a genuine cross-source
+# licence-category disagreement in the current data, and none of the 3
+# involve a masked NC/ND/SA restriction (all CC-BY vs CC0, both
+# unrestricted) - so this has not silently dropped a restriction so far.
+# Implemented as "most restrictive wins" regardless, as a structural
+# safeguard against this occurring on a future rerun with additional or
+# updated source data, rather than something to re-verify by hand each time.
+#
+# AM_direct/MTQ_CIDARIS/CIDARIS_QMT are a separate case: any CC-looking
+# value in their raw export is not a meaningful licence grant, and is
+# overridden here - these records are covered by explicit written
+# institutional permission (Claire Rowe/AM, Stefano Borghi/QMT) confirming
+# CC BY 4.0-equivalent terms with acknowledgement.
+#
+# Records with no resolvable licence in any contributing source are left as
+# NA deliberately - not assumed to be CC BY 4.0 by default, since that would
+# claim a permission the source never granted. These fall back to standard
+# GBIF/DwC handling of a blank license field ("all rights reserved" until
+# clarified).
+# -----------------------------------------------------------------------------
+
+cat("\n== Resolving per-record license (most-restrictive-wins across all contributing sources) ==\n\n")
+
+normalize_license <- function(x) {
+  x_low <- str_to_lower(coalesce(x, ""))
+  case_when(
+    str_detect(x_low, "cc0|publicdomain/zero") ~ "CC0",
+    str_detect(x_low, "by-nc-nd|by_nc_nd")      ~ "CC-BY-NC-ND",
+    str_detect(x_low, "by-nc-sa|by_nc_sa")      ~ "CC-BY-NC-SA",
+    str_detect(x_low, "by-nc|by_nc")            ~ "CC-BY-NC",
+    str_detect(x_low, "by-sa|by_sa")            ~ "CC-BY-SA",
+    str_detect(x_low, "^cc-by$|^cc_by_4_0$|by/4\\.0|licenses/by/|^cc-by \\d") ~ "CC-BY",
+    TRUE ~ NA_character_
+  )
+}
+
+license_restrictiveness <- c(
+  "CC0" = 1, "CC-BY" = 2, "CC-BY-SA" = 3,
+  "CC-BY-NC" = 4, "CC-BY-NC-SA" = 5, "CC-BY-NC-ND" = 6
+)
+
+license_category_to_uri <- c(
+  "CC0"         = "https://creativecommons.org/publicdomain/zero/1.0/",
+  "CC-BY"       = "https://creativecommons.org/licenses/by/4.0/",
+  "CC-BY-SA"    = "https://creativecommons.org/licenses/by-sa/4.0/",
+  "CC-BY-NC"    = "https://creativecommons.org/licenses/by-nc/4.0/",
+  "CC-BY-NC-SA" = "https://creativecommons.org/licenses/by-nc-sa/4.0/",
+  "CC-BY-NC-ND" = "https://creativecommons.org/licenses/by-nc-nd/4.0/"
+)
+
+echino_long_for_license <- read_csv("echino_long.csv", show_col_types = FALSE) %>%
+  select(record_key, source, any_of(c("license", "dcterms:license", "rights")))
+
+license_by_record <- echino_long_for_license %>%
+  mutate(
+    license_any = coalesce(.data[["license"]], .data[["dcterms:license"]], .data[["rights"]]),
+    license_category = normalize_license(license_any),
+    license_rank = coalesce(license_restrictiveness[license_category], -1)
+  ) %>%
+  group_by(record_key) %>%
+  slice_max(license_rank, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  select(record_key, most_restrictive_category = license_category)
+
+echino_wide <- echino_wide %>%
+  select(-any_of(c("license_resolved", "license_source"))) %>%
+  left_join(license_by_record, by = "record_key") %>%
+  mutate(
+    license_resolved = case_when(
+      primary_source %in% c("AM_direct", "MTQ_CIDARIS", "CIDARIS_QMT") ~
+        "https://creativecommons.org/licenses/by/4.0/",
+      !is.na(most_restrictive_category) ~ license_category_to_uri[most_restrictive_category],
+      TRUE ~ NA_character_
+    ),
+    license_source = case_when(
+      primary_source %in% c("AM_direct", "MTQ_CIDARIS", "CIDARIS_QMT") ~
+        "institutional_written_permission",
+      !is.na(most_restrictive_category) ~ "source_reported_most_restrictive",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  select(-most_restrictive_category)
+
+cat("Records by resolved license category:\n")
+print(echino_wide %>% count(license_resolved, license_source, sort = TRUE))
+
+n_unresolved <- sum(is.na(echino_wide$license_resolved))
+cat(sprintf("\nRecords with NO resolvable license (%d, %.1f%%) - NOT assumed to be CC BY 4.0.\n",
+            n_unresolved, 100 * n_unresolved / nrow(echino_wide)))
+
 # =============================================================================
 # SECTION 7: FINAL SAVE + SUMMARY DIAGNOSTICS
 # =============================================================================
@@ -3889,6 +3998,8 @@ key_columns <- tribble(
   "worms_phylum", "Phylum (Echinodermata for all records) from the same WoRMS lookup as worms_class/best_family/best_order.", "Section 6k",
   "best_family", "Family, resolved via WoRMS lookup on aphiaID (not from unreconciled per-source family__* columns). NA where aphiaID is missing or WoRMS has no family on record for that AphiaID.", "Section 6k",
   "best_order", "Order, resolved via WoRMS lookup on aphiaID (not from unreconciled per-source order__* columns). NA where aphiaID is missing or WoRMS has no order on record for that AphiaID.", "Section 6k",
+  "license_resolved", "Resolved licence URI for this record - most restrictive licence among all contributing sources (CC BY 4.0 for AM/QMT records, per written institutional permission)", "Section 6L",
+  "license_source", "How license_resolved was determined: institutional_written_permission (AM/QMT) or source_reported_most_restrictive (all others); NA if no source reported a resolvable licence", "Section 6L",
   "crosses_zone_boundary", "TRUE if best_min_depth and best_max_depth fall in different depth_zone values (depth_zone == 'Spans X to Y'). Use THIS, not is_straddler, to exclude records from zone-stratified analyses (TIa, completeness crosstabs etc) - the two flags overlap on only 10/41 records", "Section 7c"
 )
 
@@ -4059,7 +4170,7 @@ occ <- tibble(
   occurrenceID        = paste0("JCU-ECHINODERM:", echino_wide$record_key),
   modified            = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
   language            = "eng",
-  license             = "http://creativecommons.org/licenses/by/4.0/legalcode",
+  license             = coalesce(echino_wide$license_resolved, ""),
   rightsHolder        = "James Cook University",
   # <<< FILL IN: Scientific Data DOI once assigned >>>
   references          = "https://doi.org/[Scientific-Data-DOI]", # populated after Scientific Data DOI is minted
@@ -4177,6 +4288,7 @@ occ <- tibble(
     '","is_straddler":', str_to_lower(as.character(echino_wide$is_straddler)),
     ',"crosses_zone_boundary":', str_to_lower(as.character(echino_wide$crosses_zone_boundary)),
     ',"coord_land_qc_flag":"', echino_wide$coord_land_qc_flag,
+    '","license_source":"', coalesce(echino_wide$license_source, "unresolved"),
     '"}'
   )
 ) %>%
@@ -4464,7 +4576,7 @@ eml_xml <- c(
   '      <keyword>deep sea</keyword>',
   '    </keywordSet>',
   '    <intellectualRights>',
-  '      <para>This work is licensed under a <ulink url="https://creativecommons.org/licenses/by/4.0/legalcode"><citetitle>Creative Commons Attribution (CC BY 4.0) License</citetitle></ulink>. Includes records supplied by the Australian Museum and by Queensland Museum Tropics, both used with written permission and acknowledged as contributing institutions.</para>',
+  '    <para>The original compilation, curation, quality-control information, consensus fields, derived variables, and associated documentation produced by the authors are released under a Creative Commons Attribution 4.0 International licence (CC BY 4.0). Third-party source records and associated content retain their original licences and rights conditions, as specified by the respective data providers and, where applicable, in the licence and provenance information retained per-record in this dataset (see the "license" field of occurrence.txt). Original Collection Management System exports supplied by the Australian Museum and Queensland Museum Tropics were used with written permission and remain subject to the holding institutions\' access conditions; derived occurrence records from these sources are included in the deposited dataset with the depositors\' permission.</para>',
   '    </intellectualRights>',
   '    <distribution scope="document">',
   '      <online>',
@@ -4571,3 +4683,6 @@ cat("  2. Validate the archive at https://tools.gbif.org/dwca-validator/\n")
 cat("  3. Deposit on Zenodo for an immediate citable DOI.\n")
 cat("  4. Submit through the OBIS Australia IPT (or ALA IPT);\n")
 cat("     federation to GBIF is automatic once accepted.\n")
+
+writeLines(capture.output(sessionInfo()), "sessionInfo.txt")
+
