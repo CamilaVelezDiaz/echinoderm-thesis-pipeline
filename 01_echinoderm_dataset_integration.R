@@ -481,9 +481,25 @@ conflict_fields <- c(
   "scientificName", "taxonRank",
   "kingdom", "phylum", "class", "order", "family", "genus", "specificEpithet",
   "year", "eventDate", "basisOfRecord",
-  "locality", "typeStatus", "identifiedBy", "dateIdentified"
+  "locality", "typeStatus", "identifiedBy", "dateIdentified",
+  "locality", "typeStatus", "identifiedBy", "dateIdentified",
+  "license", "dcterms:license", "rights"
 )
 conflict_fields <- intersect(conflict_fields, names(echino_long_raw))
+
+# NOTE: license / dcterms:license are deliberately NOT in conflict_fields
+# and NOT specially handled here - they fall through to consensus_fields
+# below and get resolved by "first non-blank value in source-priority
+# order" like any other field. That resolution is NOT appropriate for
+# licence conditions (a restriction from a lower-priority source can be
+# genuinely binding regardless of what a higher-priority source reports).
+# The license/dcterms:license columns that end up in echino_wide.csv
+# should NOT be used directly for anything - the real per-record licence
+# is resolved separately and correctly in Section 6L of
+# 02_echinoderm_post_processing.R, which reads echino_long.csv directly
+# and applies a "most restrictive wins" rule across ALL contributing
+# sources. See license_resolved / license_source in echino_wide.csv for
+# the actual, correct values.
 
 # --- 8.2 Per-source columns for conflict fields ---
 wide_conflicts <- echino_long_raw %>%
