@@ -98,7 +98,7 @@ obis_echi <- read_csv("C:\\Users\\Camilita\\Desktop\\JCU\\Thesis\\Phase 1\\OBIS\
     )
   )
 
-# --- MICHELA CIDARIS (MTQ_CIDARIS) ---
+# --- CIDARIS Echinodermata dataset ---
 michela_raw <- read_excel(
   "C:\\Users\\Camilita\\Desktop\\JCU\\Thesis\\Phase 1\\Cidaris - Michela\\MTQ echinoderms - registered - June 2021 final.xlsx",
   sheet = "Raw data from Vernon"
@@ -151,13 +151,13 @@ michela <- michela_raw %>%
     basisOfRecord   = "PreservedSpecimen",
     institutionCode = "MTQ",
     collectionCode  = as.character(`Collecting Unit Name`),
-    datasetName     = "MTQ Echinoderms registered June 2021",
+    datasetName     = "CIDARIS Echinodermata dataset",
     preparations    = as.character(`Field Coll Specimen Category`),
     verbatimLocality = as.character(`Field Coll Place`),
     fieldNumber     = as.character(`Field Coll Ref`)
   )
 
-# --- STEFANO CIDARIS (CIDARIS_QMT) --- 
+# --- QMT - CIDARIS Echinodermata CMS export --- 
 stefano_raw <- read_excel(
   "C:\\Users\\Camilita\\Desktop\\JCU\\Thesis\\Phase 1\\MQT - Stefano\\CIDARIS_Echinoderms.xlsx"
 )
@@ -187,7 +187,7 @@ stefano <- stefano_raw %>%
     basisOfRecord    = "PreservedSpecimen",
     institutionCode  = "QMT",
     collectionCode   = as.character(`Collecting Unit`),
-    datasetName      = "CIDARIS Echinoderms QMT",
+    datasetName      = "QMT - CIDARIS Echinodermata CMS export",
     fieldNumber      = as.character(`Field Coll Ref`),
     order            = as.character(`Taxon - Order`)
   )
@@ -272,8 +272,8 @@ source_priority_levels <- c(
   "ALA_echinodermata",  # 3 — broad echinoderm pull via ALA
   "CSIRO_GBRSBD",       # 4 — GBRSBD via CSIRO
   "CSIRO_QM",           # 5 — QM other invertebrates via CSIRO
-  "MTQ_CIDARIS",        # 6 — direct MTQ CMS export
-  "CIDARIS_QMT",        # 7 — direct QMT CMS export (CIDARIS expeditions)
+  "MTQ_CIDARIS",        # 6 — CIDARIS Echinodermata dataset
+  "CIDARIS_QMT",        # 7 — QMT - CIDARIS Echinodermata CMS direct export
   "AM_direct",          # 8 — direct AM CMS export, high authority
   "GBIF_QM",            # 9 — QM other invertebrates via GBIF
   "GBIF_echinodermata", # 10 — broad echinoderm pull via GBIF
@@ -364,10 +364,15 @@ cat("✅ After Echinodermata filter:", nrow(echino_long_raw), "rows\n")
 # =============================================================================
 # SECTION 5: FILTER — Northeast Australia
 # =============================================================================
-# Primary filter: bounding box (10°S–29°S, 142°E–154°E)
-# Supplementary: stateProvince text match to capture Gulf of Carpentaria
-# (west of 142°E) and Torres Strait (north of 10°S)
-# Note: PNG records removed post-hoc in postprocessing script Section 1b
+# Primary filter: coordinate bounding box (10°S–29°S, 142°E–154°E), OR
+# stateProvince text match ("queensland|qld") for records whose coordinates
+# fall outside this box but are institutionally attributed to Queensland
+# (captures Gulf of Carpentaria, Torres Strait, and other edge-of-range
+# records with a Queensland stateProvince). Records admitted via the text
+# match but with coordinates outside the expected study region are
+# individually reviewed and confirmed or excluded in post-processing
+# Section 1c (geographic scope exclusions) — see that section for the
+# final reviewed extent (9°S–30°S, 136°E–167°E) and per-record decisions.
 
 echino_long_raw <- echino_long_raw %>%
   mutate(
@@ -453,6 +458,29 @@ cat("✅ Unique record keys (after catalogNumber reconciliation):",
 cat("   Rows collapsed by catalogNumber reconciliation:",
     keys_before_reconciliation - n_distinct(echino_long_raw$record_key), "\n")
 
+# -----------------------------------------------------------------------------
+# DIAGNOSTIC (verification only — not required for the pipeline output):
+# catalogNumber-based keys spanning more than one institutionCode.
+# institutionCode is compared case-insensitively (str_to_upper) because the
+# same institution reports through different export channels with different
+# casing (QM/qm, MTQ, QMT, AM/am, SAMA/sama) — these are NOT genuinely
+# different institutions.
+# -----------------------------------------------------------------------------
+catnum_institution_check <- echino_long_raw %>%
+  filter(str_starts(record_key, "CAT_")) %>%
+  mutate(institutionCode_upper = str_to_upper(str_trim(institutionCode))) %>%
+  group_by(record_key) %>%
+  summarise(n_institutions = n_distinct(institutionCode_upper[institutionCode_upper != ""]),
+            institutions   = paste(sort(unique(institutionCode_upper)), collapse = ";"),
+            .groups = "drop")
+
+n_catnum_keys <- n_distinct(echino_long_raw$record_key[str_starts(echino_long_raw$record_key, "CAT_")])
+n_multi_institution <- sum(catnum_institution_check$n_institutions > 1)
+
+cat("catalogNumber-based keys spanning >1 institutionCode:", n_multi_institution,
+    "of", n_catnum_keys,
+    sprintf("(%.1f%%)\n", 100 * n_multi_institution / n_catnum_keys))
+print(catnum_institution_check %>% filter(n_institutions > 1) %>% count(institutions))
 
 # =============================================================================
 # SECTION 7: LAYER A — SAVE LONG FORMAT
@@ -466,6 +494,16 @@ write_csv(echino_long, "echino_long.csv")
 cat("\n✅ LAYER A saved: echino_long.csv\n")
 cat("   Rows:", nrow(echino_long), "| Columns:", ncol(echino_long), "\n")
 
+# -----------------------------------------------------------------------------
+# Companion export: only the columns relevant for licence resolution,
+# so that Section 6L/8 of the post-processing reads this instead of the entire echino_long.csv.
+# -----------------------------------------------------------------------------
+
+echino_long %>%
+  select(record_key, source, any_of(c("license", "dcterms:license", "rights"))) %>%
+  write_csv("echino_long_license_fields.csv")
+
+cat("Licence-fields companion file saved: echino_long_license_fields.csv\n")
 
 # =============================================================================
 # SECTION 8: LAYER B — WIDE FORMAT (one row per record_key)
